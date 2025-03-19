@@ -34,14 +34,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Sonuçları kullan
 	for _, result := range results {
-		// Şimdi doğrudan if koşullarında kullanabilirsiniz
 		if result.GetBool("active") {
 			fmt.Println("Bu pitch aktif!")
 		}
 
-		// Sayısal değerlerle işlemler yapabilirsiniz
 		id := result.GetInt("id")
 		year := result.GetInt("facility.year")
 
@@ -49,7 +46,6 @@ func main() {
 			fmt.Printf("Yeni tesis (%d), Pitch ID: %d\n", year, id)
 		}
 
-		// String değerler
 		title := result.GetString("title")
 		city := result.GetString("address.city")
 

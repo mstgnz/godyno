@@ -1,67 +1,67 @@
 # DynamiGo
 
-DynamiGo, Go veritabanı sorgularını otomatik olarak gerçek tiplerle eşleşen dinamik struct'lara dönüştüren hafif bir kütüphanedir. Laravel'deki `stdClass` benzeri bir deneyimi Go'da sağlar, ancak Go'nun statik tip güvenliğinden ödün vermez.
+DynamiGo is a lightweight library that automatically converts Go database query results into dynamic structs with matching real types. It provides an experience similar to Laravel's `stdClass` in Go, without compromising Go's static type safety.
 
-## 🌟 Temel Özellikleri
+## 🌟 Key Features
 
-- **Otomatik Tip Belirleme**: Veritabanı sorgusunun sonuçlarına göre doğru veri tipleriyle struct oluşturur
-- **İç İçe Alan Desteği**: `address.city` gibi nokta notasyonuyla iç içe alanlara erişim
-- **Doğrudan Kullanım**: Değerleri koşul ifadelerinde ve operasyonlarda doğrudan kullanabilirsiniz
-- **Tipe Özel Getters**: `GetBool()`, `GetInt()`, `GetFloat()`, `GetString()` gibi tip güvenlikli getterlar
-- **Saf Go Implementasyonu**: Harici bağımlılık gerektirmez, sadece standart kütüphane kullanır
+- **Automatic Type Detection**: Creates structs with correct data types based on database query results
+- **Nested Field Support**: Access nested fields with dot notation like `address.city`
+- **Direct Usage**: Use values directly in conditional expressions and operations
+- **Type-Safe Getters**: Type-safe getters like `GetBool()`, `GetInt()`, `GetFloat()`, `GetString()`
+- **Pure Go Implementation**: Requires no external dependencies, uses only standard library
 
-## 🤔 Neden DynamiGo?
+## 🤔 Why DynamiGo?
 
 ### Problem
 
-Go'da veritabanı sorgularını çalıştırdığınızda, sonuçları almak için genellikle iki yol vardır:
+When running database queries in Go, there are typically two ways to get results:
 
-1. **Önceden tanımlanmış struct**'lar: Esnek değildir, her sorgu için farklı struct yapıları gerektirir
-2. **map[string]interface{}**: Oldukça esnek, ancak tip dönüşümü zorluğu yaratır
+1. **Predefined structs**: Not flexible, requires different struct structures for each query
+2. **map[string]interface{}**: Very flexible, but creates type conversion difficulties
 
 ```go
-// map[string]interface{} kullanımındaki zorluk:
+// Challenge with map[string]interface{}:
 data := map[string]interface{}{"active": true}
 
-// Bu doğrudan çalışmaz - tip dönüşümü gerektirir
-if data["active"] {  // Derleme hatası!
+// This doesn't work directly - requires type conversion
+if data["active"] {  // Compilation error!
     // ...
 }
 
-// Bunun yerine her zaman tip dönüşümü yapmanız gerekir
+// Instead, you always need to perform type conversion
 if active, ok := data["active"].(bool); ok && active {
     // ...
 }
 ```
 
-### Çözüm
+### Solution
 
-DynamiGo, veritabanı sorgularını otomatik olarak Go değerlerine dönüştürür ve tip güvenli bir API sağlar:
+DynamiGo automatically converts database queries to Go values and provides a type-safe API:
 
 ```go
-// DynamiGo ile:
+// With DynamiGo:
 results, _ := dynamigo.QueryToStruct(db, "SELECT id, active, count FROM products")
 
-// Doğrudan if koşullarında kullanım:
+// Direct usage in if conditions:
 if results[0].GetBool("active") {
-    fmt.Println("Ürün aktif!")
+    fmt.Println("Product is active!")
 }
 
-// Sayısal işlemler:
+// Numeric operations:
 if results[0].GetInt("count") > 10 {
-    fmt.Println("Yüksek stok!")
+    fmt.Println("High stock!")
 }
 ```
 
-## 📦 Kurulum
+## 📦 Installation
 
 ```bash
 go get github.com/yourusername/dynamigo
 ```
 
-## 🚀 Kullanım
+## 🚀 Usage
 
-### Basit Sorgu
+### Basic Query
 
 ```go
 package main
@@ -90,22 +90,22 @@ func main() {
     }
 
     for _, product := range results {
-        // Boolean değerler
+        // Boolean values
         if product.GetBool("active") {
-            // Sayısal değerler
+            // Numeric values
             id := product.GetInt("id")
             price := product.GetFloat("price")
 
-            // String değerler
+            // String values
             title := product.GetString("title")
 
-            fmt.Printf("Ürün #%d: %s - %.2f TL\n", id, title, price)
+            fmt.Printf("Product #%d: %s - %.2f USD\n", id, title, price)
         }
     }
 }
 ```
 
-### İç İçe Alanlarla Kullanım
+### Using Nested Fields
 
 ```go
 query := `SELECT
@@ -128,19 +128,19 @@ if err != nil {
 if len(result) > 0 {
     product := result[0]
 
-    fmt.Println("Ürün:", product.GetString("title"))
-    fmt.Println("Kategori:", product.GetString("category.name"))
+    fmt.Println("Product:", product.GetString("title"))
+    fmt.Println("Category:", product.GetString("category.name"))
 
-    // İç içe alanlara erişim
+    // Access to nested fields
     if product.GetInt("stock.quantity") > 0 && product.GetString("stock.status") == "available" {
-        fmt.Println("Stokta var!")
+        fmt.Println("In stock!")
     }
 }
 ```
 
-## 💡 Laravel'den Go'ya Geçiş Yapanlar İçin
+## 💡 For Those Transitioning from Laravel to Go
 
-Laravel'de aşağıdaki yapıyı kullanıyorsanız:
+If you're using the following structure in Laravel:
 
 ```php
 $products = DB::select('select * from products');
@@ -151,7 +151,7 @@ foreach ($products as $product) {
 }
 ```
 
-DynamiGo ile Go'da benzer şekilde yazabilirsiniz:
+With DynamiGo, you can write similarly in Go:
 
 ```go
 products, _ := dynamigo.QueryToStruct(db, "SELECT * FROM products")
@@ -162,26 +162,26 @@ for _, product := range products {
 }
 ```
 
-## 🧪 Birim Testleri
+## 🧪 Unit Tests
 
-Tüm testleri çalıştırmak için:
+To run all tests:
 
 ```bash
 go test -v ./...
 ```
 
-## 📄 Lisans
+## 📄 License
 
-MIT Lisansı altında dağıtılmaktadır. Daha fazla bilgi için `LICENSE` dosyasına bakın.
+Distributed under the MIT License. See the `LICENSE` file for more information.
 
-## 🤝 Katkıda Bulunma
+## 🤝 Contributing
 
-Katkılarınızı memnuniyetle karşılıyoruz! Lütfen bir pull request göndermeden önce testlerinizi ekleyin ve kodun Go standartlarına uygun olduğundan emin olun.
+Your contributions are welcome! Please add your tests before submitting a pull request and ensure the code complies with Go standards.
 
-## 📊 Performans
+## 📊 Performance
 
-DynamiGo, dinamik tiplerle çalıştığı ve reflection kullandığı için, önceden tanımlanmış struct'lara göre az miktarda performans farkı gösterebilir. Ancak, pek çok uygulama için bu fark ihmal edilebilir seviyededir ve DynamiGo'nun sağladığı esneklik bu ufak performans maliyetini fazlasıyla telafi eder.
+Since DynamiGo works with dynamic types and uses reflection, it may show a slight performance difference compared to predefined structs. However, for many applications, this difference is negligible, and the flexibility provided by DynamiGo more than compensates for this small performance cost.
 
-## 🙏 İlham Kaynakları
+## 🙏 Inspiration
 
-Bu kütüphane, Laravel'in `stdClass` nesnesi ve PHP'nin dinamik tiplemesi gibi özelliklerin Go'da güvenli bir şekilde kullanılabilmesi için geliştirilmiştir. Go'nun statik tip sisteminin avantajlarını korurken, dinamik dillerdeki esnekliği sunmayı amaçlar.
+This library was developed to safely use features like Laravel's `stdClass` object and PHP's dynamic typing in Go. It aims to preserve the advantages of Go's static type system while offering the flexibility found in dynamic languages.
