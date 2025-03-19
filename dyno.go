@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
 
 	_ "github.com/lib/pq"
 )
@@ -22,6 +23,16 @@ func New() *DBResult {
 type FieldInfo struct {
 	Name string
 	Type reflect.Type
+}
+
+// toTitle capitalizes the first letter of a string
+func toTitle(s string) string {
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 // QueryToStruct - converts database query results to dynamic struct
@@ -172,7 +183,7 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 
 		for _, field := range fields {
 			nestedFields = append(nestedFields, reflect.StructField{
-				Name: strings.Title(field.Name), // İlk harf büyük
+				Name: toTitle(field.Name),
 				Type: field.Type,
 				Tag:  reflect.StructTag(fmt.Sprintf(`json:"%s"`, field.Name)),
 			})
@@ -185,7 +196,7 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 	// Prepare all fields for the parent struct
 	for col, typ := range fieldTypes {
 		structFields = append(structFields, reflect.StructField{
-			Name: strings.Title(col), // First letter uppercase
+			Name: toTitle(col), // First letter uppercase
 			Type: typ,
 			Tag:  reflect.StructTag(fmt.Sprintf(`json:"%s"`, col)),
 		})
@@ -194,7 +205,7 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 	// Add nested structs to the parent struct
 	for parent, typ := range parentStructs {
 		structFields = append(structFields, reflect.StructField{
-			Name: strings.Title(parent), // First letter uppercase
+			Name: toTitle(parent), // First letter uppercase
 			Type: typ,
 			Tag:  reflect.StructTag(fmt.Sprintf(`json:"%s"`, parent)),
 		})
@@ -251,16 +262,16 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 			child := parts[1]
 
 			// Get parent object
-			parentField := structValue.FieldByName(strings.Title(parent))
+			parentField := structValue.FieldByName(toTitle(parent))
 
 			// Select nested field and assign value
-			childField := parentField.FieldByName(strings.Title(child))
+			childField := parentField.FieldByName(toTitle(child))
 			if childField.IsValid() && childField.CanSet() {
 				childField.Set(reflect.ValueOf(val))
 			}
 		} else {
 			// Assign value to parent field
-			field := structValue.FieldByName(strings.Title(col))
+			field := structValue.FieldByName(toTitle(col))
 			if field.IsValid() && field.CanSet() {
 				field.Set(reflect.ValueOf(val))
 			}
@@ -280,7 +291,7 @@ func (dr *DBResult) Get(fieldName string) any {
 
 	// If there is a nested field, proceed
 	for _, part := range parts {
-		fieldName := strings.Title(part) // First letter uppercase
+		fieldName := toTitle(part) // First letter uppercase
 		field := val.FieldByName(fieldName)
 
 		if !field.IsValid() {
