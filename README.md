@@ -1,6 +1,6 @@
-# DynamiGo
+# godyno
 
-DynamiGo is a lightweight library that automatically converts Go database query results into dynamic structs with matching real types. It provides an experience similar to Laravel's `stdClass` in Go, without compromising Go's static type safety.
+GoDyno is a lightweight library that automatically converts Go database query results into dynamic structs with matching real types. It provides an experience similar to Laravel's `stdClass` in Go, without compromising Go's static type safety.
 
 ## 🌟 Key Features
 
@@ -10,18 +10,18 @@ DynamiGo is a lightweight library that automatically converts Go database query 
 - **Type-Safe Getters**: Type-safe getters like `GetBool()`, `GetInt()`, `GetFloat()`, `GetString()`
 - **Pure Go Implementation**: Requires no external dependencies, uses only standard library
 
-## 🤔 Why DynamiGo?
+## 🤔 Why GoDyno?
 
 ### Problem
 
 When running database queries in Go, there are typically two ways to get results:
 
 1. **Predefined structs**: Not flexible, requires different struct structures for each query
-2. **map[string]interface{}**: Very flexible, but creates type conversion difficulties
+2. **map[string]any**: Very flexible, but creates type conversion difficulties
 
 ```go
-// Challenge with map[string]interface{}:
-data := map[string]interface{}{"active": true}
+// Challenge with map[string]any:
+data := map[string]any{"active": true}
 
 // This doesn't work directly - requires type conversion
 if data["active"] {  // Compilation error!
@@ -36,11 +36,11 @@ if active, ok := data["active"].(bool); ok && active {
 
 ### Solution
 
-DynamiGo automatically converts database queries to Go values and provides a type-safe API:
+GoDyno automatically converts database queries to Go values and provides a type-safe API:
 
 ```go
-// With DynamiGo:
-results, _ := dynamigo.QueryToStruct(db, "SELECT id, active, count FROM products")
+// With GoDyno:
+results, _ := GoDyno.QueryToStruct(db, "SELECT id, active, count FROM products")
 
 // Direct usage in if conditions:
 if results[0].GetBool("active") {
@@ -56,7 +56,7 @@ if results[0].GetInt("count") > 10 {
 ## 📦 Installation
 
 ```bash
-go get github.com/yourusername/dynamigo
+go get github.com/mstgnz/godyno
 ```
 
 ## 🚀 Usage
@@ -71,7 +71,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/yourusername/dynamigo"
+    "github.com/mstgnz/godyno"
     _ "github.com/lib/pq"
 )
 
@@ -84,7 +84,7 @@ func main() {
 
     query := "SELECT id, title, active, price FROM products WHERE category_id = $1"
 
-    results, err := dynamigo.QueryToStruct(db, query, 5)
+    results, err := godyno.QueryToStruct(db, query, 5)
     if err != nil {
         log.Fatal(err)
     }
@@ -120,7 +120,7 @@ JOIN categories c ON c.id = p.category_id
 JOIN stock s ON s.product_id = p.id
 WHERE p.id = $1`
 
-result, err := dynamigo.QueryToStruct(db, query, 42)
+result, err := godyno.QueryToStruct(db, query, 42)
 if err != nil {
     log.Fatal(err)
 }
@@ -151,10 +151,10 @@ foreach ($products as $product) {
 }
 ```
 
-With DynamiGo, you can write similarly in Go:
+With GoDyno, you can write similarly in Go:
 
 ```go
-products, _ := dynamigo.QueryToStruct(db, "SELECT * FROM products")
+products, _ := godyno.QueryToStruct(db, "SELECT * FROM products")
 for _, product := range products {
     if product.GetBool("active") {
         fmt.Println(product.GetString("title"))
@@ -180,7 +180,7 @@ Your contributions are welcome! Please add your tests before submitting a pull r
 
 ## 📊 Performance
 
-Since DynamiGo works with dynamic types and uses reflection, it may show a slight performance difference compared to predefined structs. However, for many applications, this difference is negligible, and the flexibility provided by DynamiGo more than compensates for this small performance cost.
+Since GoDyno works with dynamic types and uses reflection, it may show a slight performance difference compared to predefined structs. However, for many applications, this difference is negligible, and the flexibility provided by GoDyno more than compensates for this small performance cost.
 
 ## 🙏 Inspiration
 
