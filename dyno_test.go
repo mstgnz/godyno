@@ -1,7 +1,6 @@
 package godyno
 
 import (
-	"database/sql"
 	"fmt"
 	"reflect"
 	"testing"
@@ -146,22 +145,22 @@ func TestGetMethods(t *testing.T) {
 	structFields := []reflect.StructField{
 		{
 			Name: "Id",
-			Type: reflect.TypeOf(0),
+			Type: reflect.TypeFor[int](),
 			Tag:  reflect.StructTag(`json:"id"`),
 		},
 		{
 			Name: "Title",
-			Type: reflect.TypeOf(""),
+			Type: reflect.TypeFor[string](),
 			Tag:  reflect.StructTag(`json:"title"`),
 		},
 		{
 			Name: "Price",
-			Type: reflect.TypeOf(0.0),
+			Type: reflect.TypeFor[float64](),
 			Tag:  reflect.StructTag(`json:"price"`),
 		},
 		{
 			Name: "Active",
-			Type: reflect.TypeOf(false),
+			Type: reflect.TypeFor[bool](),
 			Tag:  reflect.StructTag(`json:"active"`),
 		},
 		{
@@ -169,12 +168,12 @@ func TestGetMethods(t *testing.T) {
 			Type: reflect.StructOf([]reflect.StructField{
 				{
 					Name: "Name",
-					Type: reflect.TypeOf(""),
+					Type: reflect.TypeFor[string](),
 					Tag:  reflect.StructTag(`json:"name"`),
 				},
 				{
 					Name: "Id",
-					Type: reflect.TypeOf(0),
+					Type: reflect.TypeFor[int](),
 					Tag:  reflect.StructTag(`json:"id"`),
 				},
 			}),
@@ -249,25 +248,43 @@ func TestGetMethods(t *testing.T) {
 			t.Errorf("Get(non_existent) = %v, want nil", got)
 		}
 	})
+
+	t.Run("HasField existing field", func(t *testing.T) {
+		if !dbResult.HasField("id") {
+			t.Error("HasField(id) = false, want true")
+		}
+		if !dbResult.HasField("category.name") {
+			t.Error("HasField(category.name) = false, want true")
+		}
+	})
+
+	t.Run("HasField non-existent field", func(t *testing.T) {
+		if dbResult.HasField("non_existent") {
+			t.Error("HasField(non_existent) = true, want false")
+		}
+		if dbResult.HasField("category.non_existent") {
+			t.Error("HasField(category.non_existent) = true, want false")
+		}
+	})
 }
 
 func TestCreateStruct(t *testing.T) {
 	// Define test columns and values
 	columns := []string{"id", "name", "active", "category.name", "category.id"}
-	values := []interface{}{1, "Test Product", true, "Test Category", 5}
+	values := []any{1, "Test Product", true, "Test Category", 5}
 
 	// Setup field types
 	fieldTypes := map[string]reflect.Type{
-		"id":     reflect.TypeOf(0),
-		"name":   reflect.TypeOf(""),
-		"active": reflect.TypeOf(true),
+		"id":     reflect.TypeFor[int](),
+		"name":   reflect.TypeFor[string](),
+		"active": reflect.TypeFor[bool](),
 	}
 
 	// Setup nested fields
 	fieldMap := map[string][]FieldInfo{
 		"category": {
-			{Name: "name", Type: reflect.TypeOf("")},
-			{Name: "id", Type: reflect.TypeOf(0)},
+			{Name: "name", Type: reflect.TypeFor[string]()},
+			{Name: "id", Type: reflect.TypeFor[int]()},
 		},
 	}
 
@@ -295,11 +312,3 @@ func TestCreateStruct(t *testing.T) {
 	}
 }
 
-// Helper function to create a mock database for integration tests
-func setupMockDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
-	db, mock, err := sqlmock.New()
-	if err != nil {
-		t.Fatalf("Error creating mock database: %v", err)
-	}
-	return db, mock
-}

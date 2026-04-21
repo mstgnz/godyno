@@ -1,3 +1,5 @@
+// Package godyno converts database query results into dynamic structs with
+// automatic type detection, providing type-safe access without predefined structs.
 package godyno
 
 import (
@@ -7,19 +9,22 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	_ "github.com/lib/pq"
 )
 
+// DBResult holds a single row from a database query as a dynamic struct.
+// Field types are inferred from the first row of the result set.
+// Getter methods return safe zero values when a field does not exist or cannot be converted.
 type DBResult struct {
 	value any
 	typ   reflect.Type
 }
 
+// New returns an empty DBResult. Prefer QueryToStruct for normal usage.
 func New() *DBResult {
 	return &DBResult{}
 }
 
+// FieldInfo describes a single field in a nested struct built from a dot-notation column name.
 type FieldInfo struct {
 	Name string
 	Type reflect.Type
@@ -35,140 +40,123 @@ func toTitle(s string) string {
 	return string(r)
 }
 
-// QueryToStruct - converts database query results to dynamic struct
+// QueryToStruct executes query with optional args and converts each result row
+// into a DBResult. Column types are inferred from the first non-nil value found
+// in each column across all rows, so NULL-only columns fall back to string.
 func QueryToStruct(db *sql.DB, query string, args ...any) ([]*DBResult, error) {
 	rows, err := db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("sorgu hatası: %w", err)
+		return nil, fmt.Errorf("query error: %w", err)
 	}
 	defer rows.Close()
 
-	// Get column names and types
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get column names: %w", err)
 	}
 
-	// Read first row and determine field types
-	var results []*DBResult
+	// Pass 1: read every row into memory so we can scan all values before
+	// locking column types.
+	var allValues [][]any
+	for rows.Next() {
+		vals := make([]any, len(columns))
+		ptrs := make([]any, len(columns))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		allValues = append(allValues, vals)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	if len(allValues) == 0 {
+		return nil, nil
+	}
+
+	// Pass 2: determine the type for each column using the first non-nil value
+	// found anywhere in that column.
 	fieldTypes := make(map[string]reflect.Type)
 	fieldMap := make(map[string][]FieldInfo)
 
-	// Analyze column names and determine nested structures
 	for _, col := range columns {
 		parts := strings.Split(col, ".")
 		if len(parts) > 1 {
-			// Nested field (e.g.: address.city)
-			parent := parts[0]
-			child := parts[1]
-
+			parent, child := parts[0], parts[1]
 			if _, exists := fieldMap[parent]; !exists {
 				fieldMap[parent] = []FieldInfo{}
 			}
-
-			// Initially assume string type, can be changed later
 			fieldMap[parent] = append(fieldMap[parent], FieldInfo{
 				Name: child,
-				Type: reflect.TypeOf(""),
+				Type: reflect.TypeFor[string](), // default, overwritten below
 			})
 		} else {
-			// Flat field, initially assumed to be string
-			fieldTypes[col] = reflect.TypeOf("")
+			fieldTypes[col] = reflect.TypeFor[string]() // default
 		}
 	}
 
-	// Determine field types for the first row
-	if rows.Next() {
-		// Slice to hold values
-		values := make([]any, len(columns))
-		valuePtrs := make([]any, len(columns))
-
-		for i := range columns {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("satır taranamadı: %w", err)
-		}
-
-		// Update type information
+	for _, vals := range allValues {
 		for i, col := range columns {
-			val := values[i]
-			parts := strings.Split(col, ".")
-
-			// Determine type
-			var valueType reflect.Type
-			switch v := val.(type) {
-			case []byte:
-				// Byte array, possible types: string, int, float, bool
-				str := string(v)
-
-				// Is it a number?
-				if _, err := strconv.Atoi(str); err == nil {
-					valueType = reflect.TypeOf(int(0))
-				} else if _, err := strconv.ParseFloat(str, 64); err == nil {
-					valueType = reflect.TypeOf(float64(0))
-				} else if _, err := strconv.ParseBool(str); err == nil {
-					valueType = reflect.TypeOf(bool(false))
-				} else {
-					valueType = reflect.TypeOf("")
-				}
-			case nil:
-				valueType = reflect.TypeOf("")
-			default:
-				valueType = reflect.TypeOf(val)
+			val := vals[i]
+			if val == nil {
+				continue // keep looking for a non-nil value
 			}
 
-			if len(parts) > 1 {
-				// Update type for nested field
-				parent := parts[0]
-				child := parts[1]
+			parts := strings.Split(col, ".")
+			valueType := inferType(val)
 
-				for i, field := range fieldMap[parent] {
-					if field.Name == child {
-						fieldMap[parent][i].Type = valueType
-						break
+			if len(parts) > 1 {
+				parent, child := parts[0], parts[1]
+				for j, field := range fieldMap[parent] {
+					if field.Name == child && field.Type == reflect.TypeFor[string]() {
+						fieldMap[parent][j].Type = valueType
 					}
 				}
 			} else {
-				// Update type for flat field
-				fieldTypes[col] = valueType
+				if fieldTypes[col] == reflect.TypeFor[string]() {
+					fieldTypes[col] = valueType
+				}
 			}
 		}
+	}
 
-		// Create struct for the first row
-		result, err := createStruct(columns, values, fieldTypes, fieldMap)
+	// Pass 3: build a DBResult for every row using the now-stable types.
+	results := make([]*DBResult, 0, len(allValues))
+	for _, vals := range allValues {
+		result, err := createStruct(columns, vals, fieldTypes, fieldMap)
 		if err != nil {
 			return nil, err
 		}
 		results = append(results, result)
-	}
-
-	// Process remaining rows
-	for rows.Next() {
-		values := make([]any, len(columns))
-		valuePtrs := make([]any, len(columns))
-
-		for i := range columns {
-			valuePtrs[i] = &values[i]
-		}
-
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("satır taranamadı: %w", err)
-		}
-
-		result, err := createStruct(columns, values, fieldTypes, fieldMap)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, result)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("satır işleme hatası: %w", err)
 	}
 
 	return results, nil
+}
+
+// inferType returns the reflect.Type for a scanned database value.
+// []byte columns are parsed to detect int, float64, or bool before falling back to string.
+func inferType(val any) reflect.Type {
+	switch v := val.(type) {
+	case []byte:
+		str := string(v)
+		if _, err := strconv.Atoi(str); err == nil {
+			return reflect.TypeFor[int]()
+		}
+		if _, err := strconv.ParseFloat(str, 64); err == nil {
+			return reflect.TypeFor[float64]()
+		}
+		if _, err := strconv.ParseBool(str); err == nil {
+			return reflect.TypeFor[bool]()
+		}
+		return reflect.TypeFor[string]()
+	case nil:
+		return reflect.TypeFor[string]()
+	default:
+		return reflect.TypeOf(v)
+	}
 }
 
 // createStruct - creates a dynamic struct with field types and values
@@ -261,18 +249,14 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 			parent := parts[0]
 			child := parts[1]
 
-			// Get parent object
 			parentField := structValue.FieldByName(toTitle(parent))
-
-			// Select nested field and assign value
 			childField := parentField.FieldByName(toTitle(child))
-			if childField.IsValid() && childField.CanSet() {
+			if childField.IsValid() && childField.CanSet() && val != nil {
 				childField.Set(reflect.ValueOf(val))
 			}
 		} else {
-			// Assign value to parent field
 			field := structValue.FieldByName(toTitle(col))
-			if field.IsValid() && field.CanSet() {
+			if field.IsValid() && field.CanSet() && val != nil {
 				field.Set(reflect.ValueOf(val))
 			}
 		}
@@ -284,27 +268,40 @@ func createStruct(columns []string, values []any, fieldTypes map[string]reflect.
 	}, nil
 }
 
-// Get - returns the value of a field in the struct
+// HasField reports whether the given field name (dot notation supported) exists
+// in the result. Use this to distinguish a missing field from a legitimate zero value.
+func (dr *DBResult) HasField(fieldName string) bool {
+	parts := strings.Split(fieldName, ".")
+	val := reflect.ValueOf(dr.value)
+
+	for _, part := range parts {
+		field := val.FieldByName(toTitle(part))
+		if !field.IsValid() {
+			return false
+		}
+		val = field
+	}
+	return true
+}
+
+// Get returns the raw value of fieldName (dot notation supported), or nil if the
+// field does not exist. Use HasField to distinguish nil-from-missing vs a stored nil.
 func (dr *DBResult) Get(fieldName string) any {
 	parts := strings.Split(fieldName, ".")
 	val := reflect.ValueOf(dr.value)
 
-	// If there is a nested field, proceed
 	for _, part := range parts {
-		fieldName := toTitle(part) // First letter uppercase
-		field := val.FieldByName(fieldName)
-
+		field := val.FieldByName(toTitle(part))
 		if !field.IsValid() {
 			return nil
 		}
-
 		val = field
 	}
 
 	return val.Interface()
 }
 
-// GetString - returns the value as a string
+// GetString returns the field value as a string. Returns "" if the field does not exist.
 func (dr *DBResult) GetString(fieldName string) string {
 	val := dr.Get(fieldName)
 	if val == nil {
@@ -318,7 +315,7 @@ func (dr *DBResult) GetString(fieldName string) string {
 	return fmt.Sprintf("%v", val)
 }
 
-// GetInt - returns the value as an int
+// GetInt returns the field value as an int. Returns 0 if the field does not exist or cannot be converted.
 func (dr *DBResult) GetInt(fieldName string) int {
 	val := dr.Get(fieldName)
 	if val == nil {
@@ -341,7 +338,7 @@ func (dr *DBResult) GetInt(fieldName string) int {
 	return 0
 }
 
-// GetFloat - returns the value as a float64
+// GetFloat returns the field value as a float64. Returns 0 if the field does not exist or cannot be converted.
 func (dr *DBResult) GetFloat(fieldName string) float64 {
 	val := dr.Get(fieldName)
 	if val == nil {
@@ -364,7 +361,7 @@ func (dr *DBResult) GetFloat(fieldName string) float64 {
 	return 0
 }
 
-// GetBool - returns the value as a bool
+// GetBool returns the field value as a bool. Returns false if the field does not exist or cannot be converted.
 func (dr *DBResult) GetBool(fieldName string) bool {
 	val := dr.Get(fieldName)
 	if val == nil {
@@ -383,4 +380,83 @@ func (dr *DBResult) GetBool(fieldName string) bool {
 	}
 
 	return false
+}
+
+// GetStringOk returns the field value as a string and whether the field existed.
+// Unlike GetString, this lets callers distinguish a missing field from an empty string.
+func (dr *DBResult) GetStringOk(fieldName string) (string, bool) {
+	if !dr.HasField(fieldName) {
+		return "", false
+	}
+	return dr.GetString(fieldName), true
+}
+
+// GetIntOk returns the field value as an int and whether the conversion succeeded.
+// Returns (0, false) if the field does not exist or cannot be converted to int.
+func (dr *DBResult) GetIntOk(fieldName string) (int, bool) {
+	val := dr.Get(fieldName)
+	if val == nil {
+		return 0, false
+	}
+
+	switch v := val.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case string:
+		if i, err := strconv.Atoi(v); err == nil {
+			return i, true
+		}
+	}
+
+	return 0, false
+}
+
+// GetFloatOk returns the field value as a float64 and whether the conversion succeeded.
+// Returns (0, false) if the field does not exist or cannot be converted to float64.
+func (dr *DBResult) GetFloatOk(fieldName string) (float64, bool) {
+	val := dr.Get(fieldName)
+	if val == nil {
+		return 0, false
+	}
+
+	switch v := val.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f, true
+		}
+	}
+
+	return 0, false
+}
+
+// GetBoolOk returns the field value as a bool and whether the conversion succeeded.
+// Returns (false, false) if the field does not exist or cannot be converted to bool.
+func (dr *DBResult) GetBoolOk(fieldName string) (bool, bool) {
+	val := dr.Get(fieldName)
+	if val == nil {
+		return false, false
+	}
+
+	switch v := val.(type) {
+	case bool:
+		return v, true
+	case int:
+		return v != 0, true
+	case string:
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b, true
+		}
+	}
+
+	return false, false
 }

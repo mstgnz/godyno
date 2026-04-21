@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/mstgnz/godyno"
+	_ "github.com/lib/pq"
 )
 
 func main() {

@@ -116,6 +116,44 @@ func TestEdgeCases(t *testing.T) {
 	})
 }
 
+// TestNullFirstRow verifies that a NULL in the first row does not prevent correct
+// type inference: the engine now scans all rows before locking types, so the
+// non-null value in row 2 correctly determines the column type as int.
+func TestNullFirstRow(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Error creating mock database: %v", err)
+	}
+	defer db.Close()
+
+	columns := []string{"id", "score"}
+
+	mock.ExpectQuery("SELECT").WillReturnRows(
+		sqlmock.NewRows(columns).
+			AddRow(1, nil).          // score is NULL in row 1
+			AddRow(2, []byte("42")), // score is 42 in row 2 — determines type as int
+	)
+
+	results, err := QueryToStruct(db, "SELECT id, score FROM products")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 results, got %d", len(results))
+	}
+
+	// Row 1: score was NULL — stored as zero value of the inferred int type
+	if got := results[0].GetInt("score"); got != 0 {
+		t.Errorf("Row 1 score: got %d, want 0", got)
+	}
+
+	// Row 2: score is correctly stored as int 42
+	if got := results[1].GetInt("score"); got != 42 {
+		t.Errorf("Row 2 score: got %d, want 42", got)
+	}
+}
+
 func TestFailedDBConnection(t *testing.T) {
 	// Create a mock DB that will be closed before use
 	db, _, err := sqlmock.New()

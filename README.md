@@ -59,6 +59,14 @@ if results[0].GetInt("count") > 10 {
 go get github.com/mstgnz/godyno
 ```
 
+GoDyno does not import any database driver. Add the driver for your database yourself:
+
+```go
+import _ "github.com/lib/pq"           // PostgreSQL
+import _ "github.com/go-sql-driver/mysql" // MySQL
+import _ "github.com/mattn/go-sqlite3"    // SQLite
+```
+
 ## 🚀 Usage
 
 ### Basic Query
@@ -162,6 +170,63 @@ for _, product := range products {
 }
 ```
 
+## API Reference
+
+### Standard getters (return zero value on missing field or failed conversion)
+
+| Method | Return type | Zero value |
+|--------|-------------|------------|
+| `GetString(field)` | `string` | `""` |
+| `GetInt(field)` | `int` | `0` |
+| `GetFloat(field)` | `float64` | `0` |
+| `GetBool(field)` | `bool` | `false` |
+| `Get(field)` | `any` | `nil` |
+
+### Ok-variant getters (return a second bool indicating success)
+
+Use these when you need to distinguish a legitimate zero value from a missing or unconvertible field:
+
+```go
+if score, ok := result.GetIntOk("score"); ok {
+    fmt.Println("score:", score)
+} else {
+    fmt.Println("field missing or not convertible")
+}
+```
+
+| Method | Signature |
+|--------|-----------|
+| `GetStringOk(field)` | `(string, bool)` |
+| `GetIntOk(field)` | `(int, bool)` |
+| `GetFloatOk(field)` | `(float64, bool)` |
+| `GetBoolOk(field)` | `(bool, bool)` |
+
+### Field existence check
+
+```go
+if result.HasField("category.name") {
+    fmt.Println(result.GetString("category.name"))
+}
+```
+
+## Known Limitations
+
+### Type inference uses the first non-nil value per column
+
+All rows are read into memory first; the type for each column is determined by the first non-nil value found in that column across all rows. A column that is NULL in every row falls back to `string`.
+
+If precise type handling is critical, use predefined structs with `database/sql` directly.
+
+### Silent zero values on missing fields
+
+All `Get*()` methods return the zero value of the requested type (`0`, `""`, `false`) when the field does not exist. Use `HasField()` to distinguish a legitimate zero value from a missing field:
+
+```go
+if result.HasField("score") {
+    fmt.Println(result.GetInt("score"))
+}
+```
+
 ## 🧪 Unit Tests
 
 To run all tests:
@@ -180,7 +245,19 @@ Your contributions are welcome! Please add your tests before submitting a pull r
 
 ## 📊 Performance
 
-Since GoDyno works with dynamic types and uses reflection, it may show a slight performance difference compared to predefined structs. However, for many applications, this difference is negligible, and the flexibility provided by GoDyno more than compensates for this small performance cost.
+GoDyno uses reflection to build dynamic structs, so there is a measurable cost compared to predefined structs or plain `map[string]any`. Benchmarks on Apple M2 Max:
+
+| Operation | Time | Allocs |
+|-----------|------|--------|
+| `GetInt` | ~72 ns | 2 |
+| `GetString` | ~91 ns | 2 |
+| `GetFloat` | ~95 ns | 2 |
+| `GetBool` | ~98 ns | 2 |
+| `GetString` (nested) | ~182 ns | 3 |
+| `createStruct` per row | ~4.2 µs | 60 |
+| `map[string]any` lookup (baseline) | ~7 ns | 0 |
+
+Getter calls are roughly 10-25x slower than a plain map lookup due to reflection. For typical web applications where the bottleneck is I/O, this is negligible. Avoid GoDyno in tight loops over millions of rows.
 
 ## 🙏 Inspiration
 
