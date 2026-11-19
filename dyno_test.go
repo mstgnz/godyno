@@ -1,8 +1,8 @@
 package godyno
 
 import (
+	"encoding/json"
 	"fmt"
-	"reflect"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -11,7 +11,13 @@ import (
 func TestNew(t *testing.T) {
 	result := New()
 	if result == nil {
-		t.Errorf("New() should return a non-nil DBResult")
+		t.Fatal("New() should return a non-nil DBResult")
+	}
+	if result.HasField("id") || result.Columns() != nil {
+		t.Error("New() should be a row without columns")
+	}
+	if out, err := json.Marshal(result); err != nil || string(out) != "{}" {
+		t.Errorf("New() json = %s, %v, want {}", out, err)
 	}
 }
 
@@ -141,64 +147,9 @@ func TestQueryToStruct(t *testing.T) {
 }
 
 func TestGetMethods(t *testing.T) {
-	// Create a sample struct with different field types
-	structFields := []reflect.StructField{
-		{
-			Name: "Id",
-			Type: reflect.TypeFor[int](),
-			Tag:  reflect.StructTag(`json:"id"`),
-		},
-		{
-			Name: "Title",
-			Type: reflect.TypeFor[string](),
-			Tag:  reflect.StructTag(`json:"title"`),
-		},
-		{
-			Name: "Price",
-			Type: reflect.TypeFor[float64](),
-			Tag:  reflect.StructTag(`json:"price"`),
-		},
-		{
-			Name: "Active",
-			Type: reflect.TypeFor[bool](),
-			Tag:  reflect.StructTag(`json:"active"`),
-		},
-		{
-			Name: "Category",
-			Type: reflect.StructOf([]reflect.StructField{
-				{
-					Name: "Name",
-					Type: reflect.TypeFor[string](),
-					Tag:  reflect.StructTag(`json:"name"`),
-				},
-				{
-					Name: "Id",
-					Type: reflect.TypeFor[int](),
-					Tag:  reflect.StructTag(`json:"id"`),
-				},
-			}),
-			Tag: reflect.StructTag(`json:"category"`),
-		},
-	}
-
-	structType := reflect.StructOf(structFields)
-	structVal := reflect.New(structType).Elem()
-
-	// Set values
-	structVal.FieldByName("Id").Set(reflect.ValueOf(1))
-	structVal.FieldByName("Title").Set(reflect.ValueOf("Test Product"))
-	structVal.FieldByName("Price").Set(reflect.ValueOf(19.99))
-	structVal.FieldByName("Active").Set(reflect.ValueOf(true))
-
-	categoryVal := structVal.FieldByName("Category")
-	categoryVal.FieldByName("Name").Set(reflect.ValueOf("Test Category"))
-	categoryVal.FieldByName("Id").Set(reflect.ValueOf(5))
-
-	// Create DBResult
-	dbResult := &DBResult{
-		value: structVal.Interface(),
-		typ:   structType,
-	}
+	dbResult := newTestResult(t,
+		[]string{"id", "title", "price", "active", "category.name", "category.id"},
+		int64(1), "Test Product", 19.99, true, "Test Category", int64(5))
 
 	// Test cases
 	t.Run("GetString", func(t *testing.T) {
@@ -267,48 +218,3 @@ func TestGetMethods(t *testing.T) {
 		}
 	})
 }
-
-func TestCreateStruct(t *testing.T) {
-	// Define test columns and values
-	columns := []string{"id", "name", "active", "category.name", "category.id"}
-	values := []any{1, "Test Product", true, "Test Category", 5}
-
-	// Setup field types
-	fieldTypes := map[string]reflect.Type{
-		"id":     reflect.TypeFor[int](),
-		"name":   reflect.TypeFor[string](),
-		"active": reflect.TypeFor[bool](),
-	}
-
-	// Setup nested fields
-	fieldMap := map[string][]FieldInfo{
-		"category": {
-			{Name: "name", Type: reflect.TypeFor[string]()},
-			{Name: "id", Type: reflect.TypeFor[int]()},
-		},
-	}
-
-	// Create the struct
-	result, err := createStruct(columns, values, fieldTypes, fieldMap)
-	if err != nil {
-		t.Fatalf("createStruct() error = %v", err)
-	}
-
-	// Validate the struct
-	if result.GetInt("id") != 1 {
-		t.Errorf("Expected id=1, got %v", result.GetInt("id"))
-	}
-	if result.GetString("name") != "Test Product" {
-		t.Errorf("Expected name='Test Product', got %v", result.GetString("name"))
-	}
-	if !result.GetBool("active") {
-		t.Errorf("Expected active=true, got %v", result.GetBool("active"))
-	}
-	if result.GetString("category.name") != "Test Category" {
-		t.Errorf("Expected category.name='Test Category', got %v", result.GetString("category.name"))
-	}
-	if result.GetInt("category.id") != 5 {
-		t.Errorf("Expected category.id=5, got %v", result.GetInt("category.id"))
-	}
-}
-

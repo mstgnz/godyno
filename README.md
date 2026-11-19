@@ -1,14 +1,19 @@
 # godyno
 
-GoDyno is a lightweight library that automatically converts Go database query results into dynamic structs with matching real types. It provides an experience similar to Laravel's `stdClass` in Go, without compromising Go's static type safety.
+[![ci](https://github.com/mstgnz/godyno/actions/workflows/ci.yml/badge.svg)](https://github.com/mstgnz/godyno/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/mstgnz/godyno.svg)](https://pkg.go.dev/github.com/mstgnz/godyno)
+
+GoDyno reads `database/sql` query results by column name, without a predefined struct for every query. It gives Go an experience close to Laravel's `DB::select` and `stdClass`: run a query, read `row.GetInt("id")`, return the rows as JSON.
 
 ## 🌟 Key Features
 
-- **Automatic Type Detection**: Creates structs with correct data types based on database query results
-- **Nested Field Support**: Access nested fields with dot notation like `address.city`
-- **Direct Usage**: Use values directly in conditional expressions and operations
-- **Type-Safe Getters**: Type-safe getters like `GetBool()`, `GetInt()`, `GetFloat()`, `GetString()`
-- **Pure Go Implementation**: Requires no external dependencies, uses only standard library
+- **No struct per query**: read any column by name with `GetString`, `GetInt`, `GetInt64`, `GetFloat`, `GetBool`, `GetTime`
+- **Nothing guessed, nothing lost**: the driver's value is kept as is, so `"007"` stays `"007"` and a mixed-content column never breaks the query
+- **NULL aware**: `IsNull` and the `...Ok` getters tell a NULL from a real zero
+- **Nested fields**: alias a column as `"category.name"` and read it with dot notation, or get the whole group as a map
+- **JSON ready**: a row, or a slice of rows, marshals to nested JSON
+- **Context, transactions, streaming**: works with `*sql.DB`, `*sql.Tx` and `*sql.Conn`; `QueryIter` reads large results one row at a time
+- **No dependencies**: standard library only; tested against SQLite, Postgres (pgx and lib/pq) and MySQL
 
 ## 🤔 Why GoDyno?
 
@@ -36,11 +41,11 @@ if active, ok := data["active"].(bool); ok && active {
 
 ### Solution
 
-GoDyno automatically converts database queries to Go values and provides a type-safe API:
+GoDyno keeps each row and converts on read, so a value can go straight into an `if`:
 
 ```go
 // With GoDyno:
-results, _ := GoDyno.QueryToStruct(db, "SELECT id, active, count FROM products")
+results, _ := godyno.QueryToStruct(db, "SELECT id, active, count FROM products")
 
 // Direct usage in if conditions:
 if results[0].GetBool("active") {
@@ -64,7 +69,7 @@ GoDyno does not import any database driver. Add the driver for your database you
 ```go
 import _ "github.com/lib/pq"           // PostgreSQL
 import _ "github.com/go-sql-driver/mysql" // MySQL
-import _ "github.com/mattn/go-sqlite3"    // SQLite
+import _ "modernc.org/sqlite"             // SQLite (pure Go; the one the tests use)
 ```
 
 ## 🚀 Usage
@@ -115,14 +120,16 @@ func main() {
 
 ### Using Nested Fields
 
+A dotted alias must be quoted: double quotes in Postgres and SQLite, backticks in MySQL.
+
 ```go
 query := `SELECT
     p.id,
     p.title,
     p.price,
-    c.name AS category.name,
-    s.stock AS stock.quantity,
-    s.status AS stock.status
+    c.name AS "category.name",
+    s.stock AS "stock.quantity",
+    s.status AS "stock.status"
 FROM products p
 JOIN categories c ON c.id = p.category_id
 JOIN stock s ON s.product_id = p.id
@@ -143,8 +150,56 @@ if len(result) > 0 {
     if product.GetInt("stock.quantity") > 0 && product.GetString("stock.status") == "available" {
         fmt.Println("In stock!")
     }
+
+    // The whole group as a map: map[quantity:10 status:available]
+    fmt.Println(product.Get("stock"))
 }
 ```
+
+Any depth works: `"a.b.c"` is read with `GetString("a.b.c")` and `Get("a")` returns the nested maps.
+
+### Returning Rows as JSON
+
+```go
+func listProducts(w http.ResponseWriter, r *http.Request) {
+    rows, err := godyno.QueryToStructContext(r.Context(), db,
+        `SELECT p.id, p.title, c.name AS "category.name" FROM products p JOIN categories c ON c.id = p.category_id`)
+    if err != nil {
+        http.Error(w, "query failed", http.StatusInternalServerError)
+        return
+    }
+    json.NewEncoder(w).Encode(rows)
+    // [{"category":{"name":"Books"},"id":1,"title":"Go Book"}]
+}
+```
+
+Keys are sorted (that is how `encoding/json` writes maps), NULL becomes `null` and `time.Time` uses RFC 3339. NaN and ±Infinity, which JSON cannot represent, are written as `null`; `ToMap` keeps them.
+
+### Transactions and Context
+
+```go
+tx, _ := db.BeginTx(ctx, nil)
+defer tx.Rollback()
+
+rows, err := godyno.QueryToStructContext(ctx, tx, "SELECT id, balance FROM accounts WHERE id = $1 FOR UPDATE", 7)
+```
+
+`QueryToStructContext` accepts anything with a `QueryContext` method: `*sql.DB`, `*sql.Tx` and `*sql.Conn`. If you already have `*sql.Rows` (from sqlx or a query builder), pass them to `ScanRows`.
+
+### Large Results
+
+`QueryToStruct` holds every row in memory. For an export or a batch job, iterate instead:
+
+```go
+for row, err := range godyno.QueryIter(ctx, db, "SELECT id, email FROM users") {
+    if err != nil {
+        return err
+    }
+    send(row.GetString("email"))
+}
+```
+
+Leaving the loop early closes the rows.
 
 ## 💡 For Those Transitioning from Laravel to Go
 
@@ -172,68 +227,100 @@ for _, product := range products {
 
 ## API Reference
 
-### Standard getters (return zero value on missing field or failed conversion)
+### Running queries
 
-| Method | Return type | Zero value |
-|--------|-------------|------------|
-| `GetString(field)` | `string` | `""` |
-| `GetInt(field)` | `int` | `0` |
-| `GetFloat(field)` | `float64` | `0` |
-| `GetBool(field)` | `bool` | `false` |
-| `Get(field)` | `any` | `nil` |
+| Function | Use |
+|----------|-----|
+| `QueryToStruct(db, query, args...)` | All rows from a `*sql.DB` |
+| `QueryToStructContext(ctx, q, query, args...)` | All rows, with a context, from `*sql.DB`, `*sql.Tx` or `*sql.Conn` |
+| `QueryIter(ctx, q, query, args...)` | One row at a time (`iter.Seq2[*DBResult, error]`) |
+| `ScanRows(rows)` | All rows from existing `*sql.Rows`; closes them |
 
-### Ok-variant getters (return a second bool indicating success)
+When nothing matches, the slice functions return `nil` and no error, and `QueryIter` yields nothing.
 
-Use these when you need to distinguish a legitimate zero value from a missing or unconvertible field:
+### Plain getters (lenient)
+
+They return the zero value when the field is missing, NULL or not convertible, and `GetInt` truncates `12.9` to `12`.
+
+| Method | Return type | Reads |
+|--------|-------------|-------|
+| `GetString(field)` | `string` | any value; numbers in plain decimal, times in RFC 3339 |
+| `GetInt(field)` / `GetInt64(field)` | `int` / `int64` | integers, floats, numeric text |
+| `GetFloat(field)` | `float64` | integers, floats, numeric text such as Postgres `NUMERIC` |
+| `GetBool(field)` | `bool` | bool, integers (MySQL `tinyint(1)`), `BIT(1)`, text `1/0/t/f/true/false` |
+| `GetTime(field)` | `time.Time` | `time.Time`, or text dates such as `2026-01-02 15:04:05` (read as UTC) |
+| `Get(field)` | `any` | the stored value, `nil` for NULL, a `map[string]any` for a nested group |
+
+### Ok getters (strict)
+
+They return `false` when the field is missing, NULL, or does not convert without loss (`GetIntOk` on `12.9` is `false`).
 
 ```go
-if score, ok := result.GetIntOk("score"); ok {
+if score, ok := row.GetIntOk("score"); ok {
     fmt.Println("score:", score)
-} else {
-    fmt.Println("field missing or not convertible")
+} else if row.IsNull("score") {
+    fmt.Println("no score yet")
 }
 ```
 
-| Method | Signature |
-|--------|-----------|
-| `GetStringOk(field)` | `(string, bool)` |
-| `GetIntOk(field)` | `(int, bool)` |
-| `GetFloatOk(field)` | `(float64, bool)` |
-| `GetBoolOk(field)` | `(bool, bool)` |
+`GetStringOk`, `GetIntOk`, `GetInt64Ok`, `GetFloatOk`, `GetBoolOk`, `GetTimeOk`.
 
-### Field existence check
+Numeric text must be a plain decimal such as `-12.50` (and `1e5` for floats). Integers are read digit by digit, so `9007199254740993.00` stays exact. Text like `1_000`, `0x10`, `Infinity` or `NaN` is not a number here.
 
-```go
-if result.HasField("category.name") {
-    fmt.Println(result.GetString("category.name"))
-}
-```
+### Row helpers
 
-## Known Limitations
+| Method | Returns |
+|--------|---------|
+| `HasField(field)` | `true` for a column (even NULL) or a nested group |
+| `IsNull(field)` | `true` only for an existing NULL column |
+| `Columns()` | column names in query order |
+| `ToMap()` | the row as nested `map[string]any` |
+| `MarshalJSON()` | the row as nested JSON |
 
-### Type inference uses the first non-nil value per column
+### Field names
 
-All rows are read into memory first; the type for each column is determined by the first non-nil value found in that column across all rows. A column that is NULL in every row falls back to `string`.
+- A dot means nesting: `"category.name"`.
+- The first letter of each segment is case-insensitive: `"id"` and `"Id"` are the same field, `"ID"` is not.
+- Any column name works, including `count(*)` and Postgres `?column?`, but an alias is easier to read. Two unnamed Postgres expressions (`SELECT 1, 2`) are both `?column?`, which is a duplicate.
 
-If precise type handling is critical, use predefined structs with `database/sql` directly.
+## Behavior to Know
 
-### Silent zero values on missing fields
+### Duplicate column names are an error
 
-All `Get*()` methods return the zero value of the requested type (`0`, `""`, `false`) when the field does not exist. Use `HasField()` to distinguish a legitimate zero value from a missing field:
+`SELECT a.id, b.id ...` returns `godyno: duplicate column "id" (same as "id"), give one of them an alias`, because one of the two values would otherwise be lost. Give one of them an alias. The same applies to `category` together with `category.name`.
 
-```go
-if result.HasField("score") {
-    fmt.Println(result.GetInt("score"))
-}
-```
+### Values keep the driver's type
 
-## 🧪 Unit Tests
+godyno does not guess types from text. What `Get` returns depends on the driver (measured with pgx v5.13, lib/pq v1.12, go-sql-driver/mysql v1.10 and modernc.org/sqlite v1.62):
 
-To run all tests:
+| Database | Integer | Decimal | Text | Date and time |
+|----------|---------|---------|------|---------------|
+| Postgres, pgx or lib/pq | `int64` | `string` (`NUMERIC`) | `string` | `time.Time` |
+| MySQL | `int64` | `string` (`DECIMAL`) | `string` | `string`, or `time.Time` with `parseTime=true` |
+| SQLite (modernc) | `int64` | `float64`, or `int64` for a whole value in a `NUMERIC` column | `string` | `time.Time` for `DATE`/`DATETIME` columns, `string` for expressions |
+
+Older drivers can differ (older MySQL drivers return integers as text). The typed getters read all of these forms. For MySQL, add `parseTime=true&loc=Local` (or your zone) to the DSN so dates arrive as `time.Time` in the right zone.
+
+### Binary columns
+
+`BLOB` and `bytea` values are stored as `string`. Use `[]byte(row.GetString("data"))` to get the bytes back; JSON output of binary data is not meaningful.
+
+## 🧪 Tests
 
 ```bash
-go test -v ./...
+go test -race ./...
 ```
+
+Integration tests run against real drivers in a separate module, so the library itself keeps no dependencies. SQLite always runs; Postgres and MySQL run when their DSN is set:
+
+```bash
+cd integration
+GODYNO_POSTGRES_DSN='postgres://postgres:test@127.0.0.1:5432/godyno?sslmode=disable' \
+GODYNO_MYSQL_DSN='root:test@tcp(127.0.0.1:3306)/godyno' \
+go test -race ./...
+```
+
+CI runs both suites on every push and pull request.
 
 ## 📄 License
 
@@ -245,19 +332,17 @@ Your contributions are welcome! Please add your tests before submitting a pull r
 
 ## 📊 Performance
 
-GoDyno uses reflection to build dynamic structs, so there is a measurable cost compared to predefined structs or plain `map[string]any`. Benchmarks on Apple M2 Max:
+Benchmarks on Apple M2 Max (`go test -bench . -benchmem`):
 
 | Operation | Time | Allocs |
 |-----------|------|--------|
-| `GetInt` | ~72 ns | 2 |
-| `GetString` | ~91 ns | 2 |
-| `GetFloat` | ~95 ns | 2 |
-| `GetBool` | ~98 ns | 2 |
-| `GetString` (nested) | ~182 ns | 3 |
-| `createStruct` per row | ~4.2 µs | 60 |
-| `map[string]any` lookup (baseline) | ~7 ns | 0 |
+| `GetInt`, `GetString`, `GetFloat`, `GetBool` | ~9-10 ns | 0 |
+| `GetString` (nested) | ~10 ns | 0 |
+| `map[string]any` lookup (baseline) | ~7.6 ns | 0 |
+| `ScanRows`, 1000 rows of 6 columns | ~375 µs | 14.8k |
+| Plain `rows.Scan` into `[]any`, same rows (baseline) | ~337 µs | 10.8k |
 
-Getter calls are roughly 10-25x slower than a plain map lookup due to reflection. For typical web applications where the bottleneck is I/O, this is negligible. Avoid GoDyno in tight loops over millions of rows.
+Reading 1000 rows costs about 12% more than scanning them by hand, and a getter costs about as much as a map lookup. Both scan benchmarks include the sqlmock driver.
 
 ## 🙏 Inspiration
 

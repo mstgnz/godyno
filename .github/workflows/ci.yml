@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.24.x", "stable"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go vet ./...
+      - run: go test -race -coverprofile=coverage.out ./...
+      - name: Coverage at least 85%
+        run: |
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {sub("%", "", $3); print $3}')
+          echo "coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { exit !(t >= 85) }'
+      - name: govulncheck
+        if: matrix.go == 'stable'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+  # Real drivers: SQLite in-process, Postgres and MySQL as throwaway services.
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: godyno
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: godyno
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ptest"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      GODYNO_POSTGRES_DSN: postgres://postgres:test@127.0.0.1:5432/godyno?sslmode=disable
+      GODYNO_MYSQL_DSN: root:test@tcp(127.0.0.1:3306)/godyno
+    defaults:
+      run:
+        working-directory: integration
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: integration/go.mod
+          cache-dependency-path: integration/go.sum
+      - run: go vet ./...
+      - run: go test -race ./...
