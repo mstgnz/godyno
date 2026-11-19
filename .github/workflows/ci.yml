@@ -28,7 +28,7 @@ jobs:
           awk -v t="$total" 'BEGIN { exit !(t >= 85) }'
       - name: govulncheck
         if: matrix.go == 'stable'
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   # Real drivers: SQLite in-process, Postgres and MySQL as throwaway services.
   integration:
